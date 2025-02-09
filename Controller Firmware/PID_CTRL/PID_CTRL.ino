@@ -1,8 +1,19 @@
 
 
-#define DEBUG
 
+// define this if serial debug output is needed
+#define DEBUG
+#define DEBUG_SPEED 1000
+
+//============================================================================
+// FW version
+//============================================================================
+
+#define FW_STRING "FIRMWARE VERSION 0.0.1"
+
+//============================================================================
 // Pinout configs 
+//============================================================================
 
 #define PIN_MOTOR_ENA 11
 #define PIN_MOTOR_A   8
@@ -19,21 +30,28 @@
 #define PIN_DIN_MANA  5 // SW Up -> HI
 #define PIN_DIN_MANB  4 // SW Dn -> HI
 
+
+//============================================================================
 // Config Parameters for calculations
+//============================================================================
+
+#define LOOP_SPEED_MS 10
+#define DISP_ACCURACY 6 // decimal places to be printed in serial mon
+#define ERROR_THRESH 5
+#define MASTER_GAIN 2.0
 
 const double PARAM_MAXGAIN_P = 2.0;
 const double PARAM_MINGAIN_P = 0.5;
 
-const double PARAM_MAXGAIN_I = 0.05;
+const double PARAM_MAXGAIN_I = 0.1;
 const double PARAM_MINGAIN_I = 0.0;
 
-const double PARAM_MAXGAIN_D = 5.0;
+const double PARAM_MAXGAIN_D = 1000.0;
 const double PARAM_MINGAIN_D = 0.0;
 
-
-
-
+//============================================================================
 // variable setup
+//============================================================================
 
 int param_p{};
 int param_i{};
@@ -79,12 +97,23 @@ params par;
 
 
 //============================================================================
-// Eingaberoutine
+// Input reading 
 void readAInputs(aINS* AINS ) {
 //============================================================================
 
   AINS->fb = analogRead(PIN_AIN_FB);
-  AINS->sp = analogRead(PIN_AIN_SP);
+  
+  // invert setpoint
+  if (DINS.inv) {
+
+    AINS->sp = 1024 - analogRead(PIN_AIN_SP);
+
+  } else {
+
+    AINS->sp = analogRead(PIN_AIN_SP);
+  
+  }
+
   AINS->p = analogRead(PIN_AIN_SP_P);
   AINS->i = analogRead(PIN_AIN_SP_I);
   AINS->d = analogRead(PIN_AIN_SP_D);
@@ -92,7 +121,7 @@ void readAInputs(aINS* AINS ) {
 }
 
 //============================================================================
-// Eingaberoutine
+// Input Reading
 void readDInputs(dINS* DINS) {
 //============================================================================
 
@@ -115,6 +144,16 @@ void scaleInputs(aINS* AINS, params* par) {
 
 }
 
+//============================================================================
+// Check for polarization of two numbers, if both have the same sign -> true 
+//============================================================================
+
+bool checkSign(double x, double y) {
+
+  return !((x > 0) ^ (y > 0));
+
+}
+
 
 //============================================================================
 // PID Controller service routine
@@ -124,31 +163,65 @@ int servController(aINS* AINS, params* par){
 
   static double itgr_error{};
   static double last_error{};
-  static unsigned long micros_last{};
+  static unsigned long millis_last{};
 
   // calculate the distance from FB to SP 
   double error = AINS->sp - AINS->fb;
 
-  // proportional error
-  double p_err = par->p * error;
 
-  // integrated error
-  itgr_error += error;
-  double i_err = par->i * itgr_error;
+  // only act if error threshold is reached
+  // this is needed to keep the controller constantly fighting against backlash 
+  if (static_cast<int>(abs(error)) > ERROR_THRESH) {
 
-  // derivative error 
   
-  int timeDiff = static_cast<int>(micros() - micros_last);
-  double d_err = par->d * (last_error - error) / timeDiff; 
-  micros_last = micros();
-  
+    // PROPORTIONAL error
+    double p_err = par->p * error;
 
-  // routine over: overwrite the last error with the current one
-  last_error = error;
-  
-  int corrector = static_cast<int>(p_err + i_err + d_err); 
+    // INTEGRATED error
+    itgr_error += error;
+    double i_err = par->i * itgr_error;
 
-  return corrector;
+    // DERIVATIVE ERROR 
+    double timeDiff = static_cast<double>(millis() - millis_last);
+    
+    // calculate and scale current rate of change
+    double d_err = par->d * (error - last_error) / timeDiff;
+    
+    // make sure that derivative error is always opposing integrated error
+    // needs to be done to maintain dampening function
+    // if error changes very fast, both i_err and d_err will have the same direction(thats bad) 
+    if (checkSign(i_err, d_err)) {
+
+      d_err = 0;
+
+    }
+
+    // update timestamp 
+    millis_last = millis();
+
+
+    // Serial.print("D_ERR: ");
+    // Serial.print(d_err);
+    // Serial.print("I ERR: ");
+    // Serial.println(i_err);
+
+    // routine over: overwrite the last error with the current one
+    last_error = error;
+    
+    // sum all the errors together
+    int corrector = static_cast<int>((p_err + i_err + d_err) * MASTER_GAIN); 
+    
+    return corrector;
+
+  } else {
+    // if error threshold is not reached:
+    // drain integral to avoid small errors accumulating in there
+    itgr_error = 0;
+
+    // return 0 to to nothing
+    return 0;
+
+  }
 }
 
 
@@ -192,7 +265,7 @@ void setup() {
   Serial.begin(115200);
 
   // give out SW information
-  Serial.println("SOFTWARE VERSION 0.0.0");
+  Serial.println(FW_STRING);
 
   // setup output pins 
   pinMode(PIN_MOTOR_ENA, OUTPUT);
@@ -214,35 +287,52 @@ void setup() {
 
 void loop() {
 
-  // EINGABE 
+  static long millis_last{};
+
+  // INPUT
 
   readAInputs(&AINS);
   readDInputs(&DINS);
 
-  // VERARBEITUNG
+  // PROCESS
 
   scaleInputs(&AINS, &par);
   
-  // AUSGABE
+  // OUTPUT
 
   if (digitalRead(PIN_DIN_PW)) {
+
+    // service controller routine and drive motor
     driveMotor(servController(&AINS, &par));
+
+    // print controller output for debugging purposes
+    #ifdef DEBUG
+
+    if (millis() - millis_last > DEBUG_SPEED) {
+    
+      Serial.println("==============================================");
+      Serial.println();
+      Serial.print("CONTROLLER OUTPUT: ");
+      Serial.print(servController(&AINS, &par));
+      Serial.print(" ABSOLUTE ERROR: ");
+      Serial.println(AINS.sp - AINS.fb);
+      Serial.println();
+      
+    }
+
+    #endif
+
   } else {
     driveMotor(0);
   }
-
   
-  static long millis_last{};
-
-  delay(100);
-
+  // Print struct values for debug purposes
   #ifdef DEBUG
 
+  if (millis() - millis_last > DEBUG_SPEED) {
 
-  if (millis() - millis_last > 1000) {
-
-    // Ains printen
-
+    // Print Analog input values
+    Serial.println("==============================================");      
     Serial.print("AINS - FB:  ");
     Serial.print(AINS.fb);
     Serial.print(" SP: ");
@@ -257,21 +347,26 @@ void loop() {
 
     
 
-    // Gains printen
+    // Print Calculated gains
 
     Serial.print("GAINS - P:  ");
-    Serial.print(par.p);
+    Serial.print(par.p, DISP_ACCURACY);
     Serial.print(" I: ");
-    Serial.print(par.i);
+    Serial.print(par.i, DISP_ACCURACY);
     Serial.print(" D: ");
-    Serial.print(par.d);
+    Serial.print(par.d, DISP_ACCURACY);
     Serial.println();
+
+
 
     millis_last = millis();
   } 
   
   #endif
 
+  
+  // slow down loop
+  delay(LOOP_SPEED_MS);
 
 
 
