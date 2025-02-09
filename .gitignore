@@ -1,0 +1,7 @@
+# Arduino IDE temporary files
+*.bak
+*.tmp
+# Compiled binaries and object files
+*.hex
+*.elf
+/build/
