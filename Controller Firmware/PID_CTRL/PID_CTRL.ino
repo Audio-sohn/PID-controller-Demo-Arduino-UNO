@@ -94,7 +94,7 @@ params par;
 
 
 //============================================================================
-// Input reading 
+// Input wiring 
 void readAInputs(aINS* AINS ) {
 //============================================================================
 
@@ -118,7 +118,7 @@ void readAInputs(aINS* AINS ) {
 }
 
 //============================================================================
-// Input Reading
+// Input wiring
 void readDInputs(dINS* DINS) {
 //============================================================================
 
@@ -131,7 +131,7 @@ void readDInputs(dINS* DINS) {
 }
 
 //============================================================================
-// map analog ins to floats for usage in contorller math
+// map analog ins to floats for usage in controller math
 void scaleInputs(aINS* AINS, params* par) {
 //============================================================================
 
@@ -244,7 +244,7 @@ void driveMotor(int sp) {
 //============================================================================
 
   //TODO
-  // richtung setzen
+  // set direction pins
 
   if (sp < 0) {
 
@@ -258,14 +258,14 @@ void driveMotor(int sp) {
     
   }
 
-  // vorzeichen entfernen
+  // remove sign from setpoint
 
   sp = abs(sp);
   
-  // setpoint skalieren
+  // scale setpoint
   int sp_scaled = map(sp, 0, 1024, 0, 255);
    
-  // Analog out schreiben
+  // write to analo output
 
   analogWrite(PIN_MOTOR_ENA, sp_scaled);
 
